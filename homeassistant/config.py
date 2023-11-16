@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import shutil
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from urllib.parse import urlparse
 
 from awesomeversion import AwesomeVersion
@@ -1052,16 +1052,17 @@ def async_process_component_config_errors(
         config_file: str = "?"
         line: int | str = "?"
         if (log_message := p_ex.log_message) is None:
+            # No pre defined log_message is set, so we generate a message
             if isinstance(ex, vol.Invalid):
                 log_message = format_schema_error(hass, ex, p_name, p_config, link)
                 if annotation := find_annotation(p_config, ex.path):
                     config_file, line = annotation
-            else:
-                if TYPE_CHECKING:
-                    assert isinstance(ex, HomeAssistantError)
+            elif isinstance(ex, HomeAssistantError):
                 log_message = format_homeassistant_error(
                     hass, ex, p_name, p_config, link
                 )
+            else:
+                log_message = str(ex)
             config_error_messages.append((domain, p_ex, log_message, config_file, line))
         else:
             general_error_messages.append((domain, p_ex))

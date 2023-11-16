@@ -30,6 +30,7 @@ from homeassistant.const import (
     __version__,
 )
 from homeassistant.core import ConfigSource, HomeAssistant, HomeAssistantError
+from homeassistant.exceptions import ConfigValidationError
 from homeassistant.helpers import config_validation as cv, issue_registry as ir
 import homeassistant.helpers.check_config as check_config
 from homeassistant.helpers.entity import Entity
@@ -1770,6 +1771,140 @@ async def test_component_config_exceptions(
         )
     assert "Unable to import test_domain: No such file or directory" in caplog.text
     assert "Unable to import test_domain: No such file or directory" in str(ex.value)
+
+
+@pytest.mark.parametrize(
+    ("config_exception_info", "error", "messages", "log_exception"),
+    [
+        (
+            [
+                config_util.ConfigExceptionInfo(
+                    ValueError("bla"),
+                    "config_error_translation_key",
+                    "test_domain",
+                    {"test_domain": []},
+                )
+            ],
+            "bla",
+            ["bla"],
+            False,
+        ),
+        (
+            [
+                config_util.ConfigExceptionInfo(
+                    HomeAssistantError("bla"),
+                    "config_error_translation_key",
+                    "test_domain",
+                    {"test_domain": []},
+                )
+            ],
+            "bla",
+            [
+                "Invalid config for [test_domain]: bla "
+                "Please check the docs at https://example.com.",
+                "bla",
+            ],
+            False,
+        ),
+        (
+            [
+                config_util.ConfigExceptionInfo(
+                    vol.Invalid("bla", ["path"]),
+                    "config_error_translation_key",
+                    "test_domain",
+                    {"test_domain": []},
+                )
+            ],
+            "bla @ data['path']",
+            [
+                "Invalid config for [test_domain]: bla 'path', got None. "
+                "Please check the docs at https://example.com.",
+                "bla",
+            ],
+            False,
+        ),
+        (
+            [
+                config_util.ConfigExceptionInfo(
+                    vol.Invalid("bla", ["path"]),
+                    "config_error_translation_key",
+                    "test_domain",
+                    {"test_domain": []},
+                    integration_link="https://alt.example.com",
+                )
+            ],
+            "bla @ data['path']",
+            [
+                "Invalid config for [test_domain]: bla 'path', got None. "
+                "Please check the docs at https://alt.example.com.",
+                "bla",
+            ],
+            False,
+        ),
+        (
+            [
+                config_util.ConfigExceptionInfo(
+                    ImportError("bla"),
+                    "config_error_translation_key",
+                    "test_domain",
+                    {"test_domain": []},
+                    log_exception=True,
+                )
+            ],
+            "bla",
+            ["bla"],
+            True,
+        ),
+    ],
+)
+async def test_component_config_error_processing(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    error: str,
+    config_exception_info: list[config_util.ConfigExceptionInfo],
+    messages: list[str],
+    log_exception: bool,
+) -> None:
+    """Test component config error processing."""
+    test_integration = Mock(
+        domain="test_domain",
+        documentation="https://example.com",
+        get_platform=Mock(
+            return_value=Mock(
+                async_validate_config=AsyncMock(side_effect=ValueError("broken"))
+            )
+        ),
+    )
+    with pytest.raises(ConfigValidationError) as ex:
+        config_util.async_process_component_config_errors(
+            hass,
+            test_integration,
+            config_exception_info,
+            raise_on_failure=True,
+        )
+    records = [record for record in caplog.records if record.msg == messages[0]]
+    assert len(records) == 1
+    assert (records[0].exc_info is not None) == log_exception
+    assert str(ex.value) == messages[0]
+    assert ex.value.translation_key == "config_error_translation_key"
+    assert ex.value.translation_domain == "homeassistant"
+    assert ex.value.translation_placeholders == {
+        "domain": "test_domain",
+        "p_name": "test_domain",
+        "error": error,
+        "errors": "1",
+        "config_file": "?",
+        "line": "?",
+    }
+    assert all(message in caplog.text for message in messages)
+
+    caplog.clear()
+    config_util.async_process_component_config_errors(
+        hass,
+        test_integration,
+        config_exception_info,
+    )
+    assert all(message in caplog.text for message in messages)
 
 
 @pytest.mark.parametrize(
