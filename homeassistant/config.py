@@ -1055,7 +1055,9 @@ def async_process_component_config_errors(
             else:
                 if TYPE_CHECKING:
                     assert isinstance(ex, HomeAssistantError)
-                log_message = format_homeassistant_error(ex, p_name, p_config, link)
+                log_message = format_homeassistant_error(
+                    hass, ex, p_name, p_config, link
+                )
             config_file = getattr(p_config, "__config_file__", "?")
             line = getattr(p_config, "__line__", "?")
             config_error_messages.append((domain, p_ex, log_message, config_file, line))
