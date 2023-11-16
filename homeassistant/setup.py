@@ -8,7 +8,7 @@ from datetime import timedelta
 import logging.handlers
 from timeit import default_timer as timer
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from . import config as conf_util, core, loader, requirements
 from .config import async_notify_setup_error
@@ -228,14 +228,12 @@ async def _async_setup_component(
                 exc_info=ex_info.ex if ex_info.log_exception else None,
             )
             continue
-        if TYPE_CHECKING:
-            assert ex_info.p_name is not None and ex_info.p_config is not None
         conf_util.async_log_config_validator_error(
             ex_info.ex,
-            ex_info.p_name,
-            ex_info.p_config,
+            ex_info.platform_name,
+            ex_info.config,
             hass,
-            ex_info.p_integration_link or integration.documentation,
+            ex_info.integration_link or integration.documentation,
         )
 
     if processed_config is None:

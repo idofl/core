@@ -123,10 +123,10 @@ class ConfigExceptionInfo:
 
     ex: Exception
     translation_key: str
+    platform_name: str
+    config: ConfigType
     log_message: str | None = None
-    p_name: str | None = None
-    p_config: ConfigType | None = None
-    p_integration_link: str | None = None
+    integration_link: str | None = None
     log_exception: bool = False
 
 
@@ -1039,27 +1039,29 @@ def async_process_component_config_errors(
     """Process component configuration errors."""
 
     p_ex: ConfigExceptionInfo
-    config_error_messages: list[tuple[str, ConfigExceptionInfo, str, str, str]] = []
+    config_error_messages: list[
+        tuple[str, ConfigExceptionInfo, str, str, int | str]
+    ] = []
     general_error_messages: list[tuple[str, ConfigExceptionInfo]] = []
     domain = integration.domain
     for p_ex in config_exception_info:
-        link = p_ex.p_integration_link or integration.documentation
+        link = p_ex.integration_link or integration.documentation
         ex = p_ex.ex
-        p_name = p_ex.p_name
-        p_config = p_ex.p_config
+        p_name = p_ex.platform_name
+        p_config = p_ex.config
+        config_file: str = "?"
+        line: int | str = "?"
         if (log_message := p_ex.log_message) is None:
-            if TYPE_CHECKING:
-                assert p_name is not None and p_config is not None
             if isinstance(ex, vol.Invalid):
                 log_message = format_schema_error(hass, ex, p_name, p_config, link)
+                if annotation := find_annotation(p_config, ex.path):
+                    config_file, line = annotation
             else:
                 if TYPE_CHECKING:
                     assert isinstance(ex, HomeAssistantError)
                 log_message = format_homeassistant_error(
                     hass, ex, p_name, p_config, link
                 )
-            config_file = getattr(p_config, "__config_file__", "?")
-            line = getattr(p_config, "__line__", "?")
             config_error_messages.append((domain, p_ex, log_message, config_file, line))
         else:
             general_error_messages.append((domain, p_ex))
@@ -1072,9 +1074,7 @@ def async_process_component_config_errors(
     if len(config_error_messages) == 1 and not general_error_messages:
         domain, p_ex, log_message, config_file, line = config_error_messages[0]
         ex = p_ex.ex
-        p_name = p_ex.p_name
-        if TYPE_CHECKING:
-            assert p_name is not None
+        p_name = p_ex.platform_name
         translation_key = p_ex.translation_key
         placeholders = {
             "domain": domain,
@@ -1082,22 +1082,19 @@ def async_process_component_config_errors(
             "error": str(ex),
             "errors": str(len(config_exception_info)),
             "config_file": config_file,
-            "line": line,
+            "line": str(line),
         }
     elif len(general_error_messages) == 1 and not config_error_messages:
         domain, p_ex = general_error_messages[0]
         ex = p_ex.ex
         translation_key = p_ex.translation_key
-        log_message = p_ex.log_message
+        log_message = str(p_ex.log_message)
         placeholders = {
             "domain": domain,
             "error": str(ex),
             "errors": str(len(config_exception_info)),
         }
     else:
-        # We can only raise once, so we raise a generic error
-        # based on the first exception that was seen
-        ex = config_exception_info[0].ex
         translation_key = "integration_config_error"
         errors = str(len(config_exception_info))
         log_message = (
@@ -1110,10 +1107,11 @@ def async_process_component_config_errors(
         }
     raise ConfigValidationError(
         log_message,
+        [p_ex.ex for p_ex in config_exception_info],
         translation_domain="homeassistant",
         translation_key=translation_key,
         translation_placeholders=placeholders,
-    ) from ex
+    )
 
 
 async def async_process_component_config(  # noqa: C901
@@ -1134,7 +1132,9 @@ async def async_process_component_config(  # noqa: C901
         component = integration.get_component()
     except LOAD_EXCEPTIONS as ex:
         log_message = f"Unable to import {domain}: {ex}"
-        ex_info = ConfigExceptionInfo(ex, "component_import_err", log_message)
+        ex_info = ConfigExceptionInfo(
+            ex, "component_import_err", domain, config, log_message
+        )
         config_exceptions.append(ex_info)
         return None, config_exceptions
 
@@ -1149,7 +1149,7 @@ async def async_process_component_config(  # noqa: C901
         if err.name != f"{integration.pkg_path}.config":
             log_message = f"Error importing config platform {domain}: {err}"
             ex_info = ConfigExceptionInfo(
-                err, "config_platform_import_err", log_message
+                err, "config_platform_import_err", domain, config, log_message
             )
             config_exceptions.append(ex_info)
             return None, config_exceptions
@@ -1160,17 +1160,15 @@ async def async_process_component_config(  # noqa: C901
         try:
             return (await config_validator.async_validate_config(hass, config)), []
         except vol.Invalid as ex:
-            ex_info = ConfigExceptionInfo(
-                ex, "config_validation_err", p_name=domain, p_config=config
-            )
+            ex_info = ConfigExceptionInfo(ex, "config_validation_err", domain, config)
             config_exceptions.append(ex_info)
             return None, config_exceptions
         except HomeAssistantError as ex:
             ex_info = ConfigExceptionInfo(
                 ex,
                 "config_validation_err",
-                p_name=domain,
-                p_config=config,
+                platform_name=domain,
+                config=config,
                 log_exception=True,
             )
             config_exceptions.append(ex_info)
@@ -1180,6 +1178,8 @@ async def async_process_component_config(  # noqa: C901
             ex_info = ConfigExceptionInfo(
                 ex,
                 "config_validator_unknown_err",
+                domain,
+                config,
                 log_message,
                 log_exception=True,
             )
@@ -1191,9 +1191,7 @@ async def async_process_component_config(  # noqa: C901
         try:
             return component.CONFIG_SCHEMA(config), []
         except vol.Invalid as ex:
-            ex_info = ConfigExceptionInfo(
-                ex, "config_validation_err", p_name=domain, p_config=config
-            )
+            ex_info = ConfigExceptionInfo(ex, "config_validation_err", domain, config)
             config_exceptions.append(ex_info)
             return None, config_exceptions
         except Exception as ex:  # pylint: disable=broad-except
@@ -1201,6 +1199,8 @@ async def async_process_component_config(  # noqa: C901
             ex_info = ConfigExceptionInfo(
                 ex,
                 "config_schema_unknown_err",
+                domain,
+                config,
                 log_message,
                 log_exception=True,
             )
@@ -1217,14 +1217,12 @@ async def async_process_component_config(  # noqa: C901
     platforms: list[ConfigType] = []
     for p_name, p_config in config_per_platform(config, domain):
         # Validate component specific platform schema
+        platform_name = f"{domain}.{p_name}"
         try:
             p_validated = component_platform_schema(p_config)
         except vol.Invalid as ex:
             ex_info = ConfigExceptionInfo(
-                ex,
-                "platform_config_validation_err",
-                p_name=domain,
-                p_config=p_config,
+                ex, "platform_config_validation_err", domain, p_config
             )
             config_exceptions.append(ex_info)
             continue
@@ -1234,10 +1232,7 @@ async def async_process_component_config(  # noqa: C901
                 " platform schema"
             )
             ex_info = ConfigExceptionInfo(
-                ex,
-                "platform_validator_unknown_err",
-                log_message,
-                p_name=str(p_name),
+                ex, "platform_validator_unknown_err", platform_name, config, log_message
             )
             config_exceptions.append(ex_info)
             continue
@@ -1254,7 +1249,7 @@ async def async_process_component_config(  # noqa: C901
         except (RequirementsNotFound, IntegrationNotFound) as ex:
             log_message = f"Platform error: {domain} - {ex}"
             ex_info = ConfigExceptionInfo(
-                ex, "platform_component_load_err", log_message
+                ex, "platform_component_load_err", platform_name, p_config, log_message
             )
             config_exceptions.append(ex_info)
             continue
@@ -1266,6 +1261,8 @@ async def async_process_component_config(  # noqa: C901
             ex_info = ConfigExceptionInfo(
                 ex,
                 "platform_component_load_err",
+                platform_name,
+                p_config,
                 log_message,
                 log_exception=True,
             )
@@ -1277,13 +1274,12 @@ async def async_process_component_config(  # noqa: C901
             try:
                 p_validated = platform.PLATFORM_SCHEMA(p_config)
             except vol.Invalid as ex:
-                platform_name = f"{domain}.{p_name}"
                 ex_info = ConfigExceptionInfo(
                     ex,
                     "platform_config_validation_err",
-                    p_name=platform_name,
-                    p_config=p_config,
-                    p_integration_link=p_integration.documentation,
+                    platform_name,
+                    p_config,
+                    integration_link=p_integration.documentation,
                 )
                 config_exceptions.append(ex_info)
                 continue
@@ -1295,8 +1291,9 @@ async def async_process_component_config(  # noqa: C901
                 ex_info = ConfigExceptionInfo(
                     ex,
                     "platform_schema_validator_err",
+                    platform_name,
+                    p_config,
                     log_message,
-                    p_name=p_name,
                     log_exception=True,
                 )
                 config_exceptions.append(ex_info)

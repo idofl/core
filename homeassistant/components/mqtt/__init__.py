@@ -252,7 +252,7 @@ async def async_check_config_schema(
                         hass, ex, domain, config, integration.documentation
                     )
                     raise ServiceValidationError(
-                        message[0],
+                        message,
                         translation_domain=DOMAIN,
                         translation_key="invalid_platform_config",
                         translation_placeholders={
