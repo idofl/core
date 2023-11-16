@@ -1051,7 +1051,7 @@ def async_process_component_config_errors(
             if TYPE_CHECKING:
                 assert p_name is not None and p_config is not None
             if isinstance(ex, vol.Invalid):
-                log_message = format_schema_error(ex, p_name, p_config, link)
+                log_message = format_schema_error(hass, ex, p_name, p_config, link)
             else:
                 if TYPE_CHECKING:
                     assert isinstance(ex, HomeAssistantError)
